@@ -1,28 +1,15 @@
-import React, { useEffect, useState } from 'react';
-import { gameService } from '../services/gameService';
-import { GameState } from '../types';
+
+import React, { useState } from 'react';
 
 interface WaitingRoomProps {
   gameId: string;
-  onGameStart: (gameState: GameState) => void;
 }
 
-const WaitingRoom: React.FC<WaitingRoomProps> = ({ gameId, onGameStart }) => {
+const WaitingRoom: React.FC<WaitingRoomProps> = ({ gameId }) => {
   const [showCopied, setShowCopied] = useState(false);
   const gameUrl = `${window.location.origin}/?gameId=${gameId}`;
   const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(gameUrl)}`;
 
-  useEffect(() => {
-    const intervalId = setInterval(() => {
-      const game = gameService.getGame(gameId);
-      if (game && game.status === 'playing') {
-        onGameStart(game);
-      }
-    }, 1000); // Poll every second
-
-    return () => clearInterval(intervalId);
-  }, [gameId, onGameStart]);
-  
   const handleCopyLink = () => {
     navigator.clipboard.writeText(gameUrl).then(() => {
         setShowCopied(true);

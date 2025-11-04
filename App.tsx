@@ -46,6 +46,16 @@ const App: React.FC = () => {
   const [isRecording, setIsRecording] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  
+  // Use refs to hold current state for use in callbacks without triggering re-renders of the effect
+  const gameStateRef = useRef(gameState);
+  gameStateRef.current = gameState;
+  const playerRef = useRef(player);
+  playerRef.current = player;
+  const playerNameRef = useRef(playerName);
+  playerNameRef.current = playerName;
+  const onlinePhaseRef = useRef(onlinePhase);
+  onlinePhaseRef.current = onlinePhase;
   const lastPlayedVoiceMessageTimestamp = useRef<number>(0);
 
 
@@ -53,62 +63,75 @@ const App: React.FC = () => {
     audioService.setSoundEnabled(isSoundOn);
   }, [isSoundOn]);
 
+  // WebSocket connection and message handling
   useEffect(() => {
-    const gameId = new URLSearchParams(window.location.search).get('gameId');
-    if (gameId) {
-      const existingGame = gameService.getGame(gameId);
-      if (existingGame) {
-        setGameMode('online');
-        if (existingGame.status === 'playing') {
-          setGameState(existingGame);
-          setOnlinePhase('playing');
-        }
-      }
-    }
-  }, []);
-  
-  useEffect(() => {
-    if (gameMode !== 'online' || !gameState?.gameId || onlinePhase !== 'playing') {
-      return;
-    }
-  
-    const intervalId = setInterval(() => {
-      const latestGameState = gameService.getGame(gameState.gameId);
-      if (latestGameState) {
-        if (JSON.stringify(latestGameState) !== JSON.stringify(gameState)) {
-          
-          if (latestGameState.board.filter(Boolean).length > gameState.board.filter(Boolean).length && latestGameState.winnerInfo === null) {
-            audioService.playMove();
-          }
+    if (gameMode !== 'online') return;
 
-          setGameState(latestGameState);
+    const handleMessage = (data: any) => {
+        const currentGameState = gameStateRef.current;
+        if (!currentGameState || data.gameId !== currentGameState.gameId) return;
 
-          if (latestGameState.winnerInfo && !gameState.winnerInfo) {
-             const handleWin = () => {
-                if (latestGameState.winnerInfo.winner === 'Draw') {
-                    audioService.playDraw();
-                } else {
-                    audioService.playWin();
-                    setScores(prev => ({...prev, [latestGameState.winnerInfo!.winner]: prev[latestGameState.winnerInfo!.winner] + 1}))
+        switch(data.type) {
+            case 'JOIN_REQUEST':
+                if (playerRef.current === 'X' && currentGameState.status === 'waiting') {
+                    const updatedGameState: GameState = {
+                        ...currentGameState,
+                        players: [currentGameState.players[0], { name: data.playerName, symbol: 'O' }],
+                        status: 'playing',
+                    };
+                    setGameState(updatedGameState);
+                    setOnlinePhase('playing');
+                    gameService.send({
+                        type: 'GAME_STATE_SYNC',
+                        gameId: updatedGameState.gameId,
+                        payload: updatedGameState,
+                    });
                 }
-                setShowWinnerModal(true);
-             };
-             setTimeout(handleWin, 3000);
-          }
-          
-          const latestVoiceMessage = latestGameState.voiceMessages[latestGameState.voiceMessages.length - 1];
-          if (latestVoiceMessage && latestVoiceMessage.timestamp > lastPlayedVoiceMessageTimestamp.current) {
-              if (latestVoiceMessage.senderName !== playerName) {
-                 audioService.playVoiceMessage(latestVoiceMessage.audioBase64);
-              }
-              lastPlayedVoiceMessageTimestamp.current = latestVoiceMessage.timestamp;
-          }
+                break;
+            
+            case 'GAME_STATE_SYNC':
+                const newGameState: GameState = data.payload;
+                
+                // Play move sound for receiving player
+                if (JSON.stringify(newGameState.board) !== JSON.stringify(currentGameState.board) && newGameState.winnerInfo === null) {
+                    audioService.playMove();
+                }
+
+                setGameState(newGameState);
+
+                // Handle winner for receiving player
+                if (newGameState.winnerInfo && !currentGameState.winnerInfo) {
+                    setTimeout(() => {
+                        if (newGameState.winnerInfo.winner === 'Draw') {
+                            audioService.playDraw();
+                        } else {
+                            audioService.playWin();
+                            setScores(prev => ({...prev, [newGameState.winnerInfo!.winner]: prev[newGameState.winnerInfo!.winner] + 1}))
+                        }
+                        setShowWinnerModal(true);
+                    }, 3000);
+                }
+
+                // Handle voice messages for receiving player
+                const latestVoiceMessage = newGameState.voiceMessages[newGameState.voiceMessages.length - 1];
+                if (latestVoiceMessage && latestVoiceMessage.timestamp > lastPlayedVoiceMessageTimestamp.current) {
+                    if (latestVoiceMessage.senderName !== playerNameRef.current) {
+                       audioService.playVoiceMessage(latestVoiceMessage.audioBase64);
+                    }
+                    lastPlayedVoiceMessageTimestamp.current = latestVoiceMessage.timestamp;
+                }
+
+                // If a joiner receives the first sync, start the game.
+                if (onlinePhaseRef.current !== 'playing' && newGameState.status === 'playing') {
+                    setOnlinePhase('playing');
+                }
+                break;
         }
-      }
-    }, 1000);
-  
-    return () => clearInterval(intervalId);
-  }, [gameMode, gameState, onlinePhase, playerName]);
+    };
+    
+    gameService.connect(handleMessage);
+
+  }, [gameMode]);
 
 
   const handleSelectMode = (mode: GameMode) => {
@@ -140,8 +163,15 @@ const App: React.FC = () => {
   const resetGame = (mode: 'local' | 'ai' | 'online') => {
      setShowWinnerModal(false);
      if (mode === 'online' && gameState) {
-        const newGameState = gameService.resetGame(gameState.gameId);
+        const newGameState: GameState = {
+            ...gameState,
+            board: Array(9).fill(null),
+            currentPlayer: 'X',
+            status: 'playing',
+            winnerInfo: null,
+        };
         setGameState(newGameState);
+        gameService.send({ type: 'GAME_STATE_SYNC', gameId: gameState.gameId, payload: newGameState });
      } else if (mode === 'local' || mode === 'ai') {
         startNewGame(mode);
      }
@@ -149,9 +179,26 @@ const App: React.FC = () => {
 
   const resetScores = () => setScores({ X: 0, O: 0 });
 
+  const broadcastGameState = (newState: GameState) => {
+    if (gameMode === 'online') {
+        gameService.send({ type: 'GAME_STATE_SYNC', gameId: newState.gameId, payload: newState });
+    }
+  };
+
   const updateBoardAndCheckWinner = useCallback((newBoard: SquareValue[]) => {
+    if (!gameState) return;
     const newWinnerInfo = calculateWinner(newBoard);
-    const nextPlayer = gameState?.currentPlayer === 'X' ? 'O' : 'X';
+    const nextPlayer = gameState.currentPlayer === 'X' ? 'O' : 'X';
+
+    const updatedGameState: GameState = {
+        ...gameState,
+        board: newBoard,
+        currentPlayer: nextPlayer,
+        winnerInfo: newWinnerInfo,
+        status: newWinnerInfo ? 'finished' : 'playing',
+    };
+    setGameState(updatedGameState); // Optimistic update
+    broadcastGameState(updatedGameState);
 
     if (newWinnerInfo) {
         const handleWin = () => {
@@ -167,19 +214,6 @@ const App: React.FC = () => {
             setShowWinnerModal(true);
         };
         setTimeout(handleWin, 3000);
-    }
-
-    if (gameMode === 'online' && gameState) {
-      const updatedGameState = gameService.updateGame(gameState.gameId, newBoard, nextPlayer, newWinnerInfo);
-      setGameState(updatedGameState);
-    } else {
-       setGameState(prev => prev ? ({
-        ...prev,
-        board: newBoard,
-        currentPlayer: nextPlayer,
-        winnerInfo: newWinnerInfo,
-        status: newWinnerInfo ? 'finished' : 'playing',
-      }) : null);
     }
   }, [gameState, gameMode]);
   
@@ -250,26 +284,40 @@ const App: React.FC = () => {
   
   const handleCreateGame = (name: string) => {
     setPlayerName(name);
-    const game = gameService.createGame(name);
-    setGameState(game);
+    const newGame: GameState = {
+        gameId: Math.random().toString(36).substr(2, 9),
+        board: Array(9).fill(null),
+        players: [{ name: name, symbol: 'X' }, null],
+        currentPlayer: 'X',
+        status: 'waiting',
+        winnerInfo: null,
+        chat: [],
+        voiceMessages: [],
+    };
+    setGameState(newGame);
     setPlayer('X');
     setOnlinePhase('waiting');
-    window.history.pushState({}, '', `?gameId=${game.gameId}`);
+    window.history.pushState({}, '', `?gameId=${newGame.gameId}`);
   };
 
   const handleJoinGame = (name: string) => {
     const gameId = new URLSearchParams(window.location.search).get('gameId');
     if (gameId) {
       setPlayerName(name);
-      try {
-        const game = gameService.joinGame(gameId, name);
-        setGameState(game);
-        setPlayer('O');
-        setOnlinePhase('playing');
-      } catch (error: any) {
-        alert(error.message);
-        window.history.pushState({}, '', '/');
-      }
+      setPlayer('O');
+      const tempGameState: GameState = {
+        gameId,
+        board: Array(9).fill(null),
+        players: [null, { name, symbol: 'O' }],
+        currentPlayer: 'X',
+        status: 'waiting',
+        winnerInfo: null,
+        chat: [],
+        voiceMessages: [],
+      };
+      setGameState(tempGameState);
+      setOnlinePhase('playing');
+      gameService.send({ type: 'JOIN_REQUEST', gameId, playerName: name });
     }
   };
 
@@ -284,8 +332,10 @@ const App: React.FC = () => {
   
   const handleSendMessage = (message: string) => {
     if (gameMode === 'online' && gameState && playerName) {
-      const updatedGameState = gameService.sendMessage(gameState.gameId, playerName, message);
+      const newMessage: ChatMessage = { senderName: playerName, text: message, timestamp: Date.now() };
+      const updatedGameState = {...gameState, chat: [...gameState.chat, newMessage]};
       setGameState(updatedGameState);
+      broadcastGameState(updatedGameState);
     }
   };
 
@@ -307,8 +357,10 @@ const App: React.FC = () => {
             reader.onloadend = () => {
                 const base64String = reader.result as string;
                 if (gameMode === 'online' && gameState && playerName) {
-                    const updatedGameState = gameService.sendVoiceMessage(gameState.gameId, playerName, base64String);
+                    const newVoiceMessage = { senderName: playerName, audioBase64: base64String, timestamp: Date.now() };
+                    const updatedGameState = {...gameState, voiceMessages: [...gameState.voiceMessages, newVoiceMessage]};
                     setGameState(updatedGameState);
+                    broadcastGameState(updatedGameState);
                 }
             };
             stream.getTracks().forEach(track => track.stop()); // Stop microphone access
@@ -339,14 +391,14 @@ const App: React.FC = () => {
        return <OnlineLobby onJoin={handleJoinGame} onCreate={handleCreateGame} isJoining={!!gameId} />;
     }
     if (onlinePhase === 'waiting' && gameState) {
-      return <WaitingRoom gameId={gameState.gameId} onGameStart={(gs) => { setGameState(gs); setOnlinePhase('playing'); }} />;
+      return <WaitingRoom gameId={gameState.gameId} />;
     }
   }
 
   if (!gameState) {
     return (
       <div className="bg-slate-50 text-slate-800 min-h-screen flex flex-col items-center justify-center p-4">
-        <h2 className="text-2xl font-bold">Something went wrong.</h2>
+        <h2 className="text-2xl font-bold">Loading Game...</h2>
         <button onClick={handleReturnToMenu} className="mt-4 text-teal-500">Return to Menu</button>
       </div>
     );
@@ -362,7 +414,11 @@ const App: React.FC = () => {
   let turnText = '';
   if (gameState.status === 'playing') {
     if (gameMode === 'online') {
-      turnText = isMyTurn ? "Your Turn" : `${opponentName}'s Turn`;
+      if (!gameState.players[1]) {
+        turnText = "Waiting for opponent...";
+      } else {
+        turnText = isMyTurn ? "Your Turn" : `${opponentName}'s Turn`;
+      }
     } else if (gameMode === 'ai') {
       turnText = gameState.currentPlayer === 'X' ? "Your Turn" : "Gemini's Turn";
     } else {
@@ -403,7 +459,7 @@ const App: React.FC = () => {
         squares={gameState.board}
         onClick={handleSquareClick}
         winningLine={gameState.winnerInfo?.line}
-        isLocked={!isMyTurn || gameState.status !== 'playing'}
+        isLocked={!isMyTurn || gameState.status !== 'playing' || !gameState.players[1]}
       />
     </>
   );
