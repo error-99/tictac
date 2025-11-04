@@ -1,5 +1,7 @@
 {
   "name": "Copy of Gemini Tic-Tac-Toe",
-  "description": "A visually appealing Tic-Tac-Toe game with local, AI, and online 2-player modes featuring live chat and sound effects, built with React and Tailwind CSS.",
-  "requestFramePermissions": []
+  "description": "A visually appealing Tic-Tac-Toe game with local, AI, and online 2-player modes featuring live chat, voice messages, and sound effects, built with React and Tailwind CSS.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
 }

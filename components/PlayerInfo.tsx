@@ -6,9 +6,10 @@ interface PlayerInfoProps {
   isActive: boolean;
   isRightAligned?: boolean;
   isThinking?: boolean;
+  isYou?: boolean;
 }
 
-const PlayerInfo: React.FC<PlayerInfoProps> = ({ name, avatar, isActive, isRightAligned = false, isThinking = false }) => {
+const PlayerInfo: React.FC<PlayerInfoProps> = ({ name, avatar, isActive, isRightAligned = false, isThinking = false, isYou = false }) => {
   return (
     <div className={`flex items-center gap-3 ${isRightAligned ? 'flex-row-reverse' : ''}`}>
       <div className="relative w-16 h-16">
@@ -35,8 +36,9 @@ const PlayerInfo: React.FC<PlayerInfoProps> = ({ name, avatar, isActive, isRight
           </div>
         )}
       </div>
-      <div className={`${isRightAligned ? 'text-right' : 'text-left'}`}>
+      <div className={`h-12 ${isRightAligned ? 'text-right' : 'text-left'}`}>
         <p className="font-semibold text-slate-700 truncate max-w-[100px]">{name}</p>
+        {isYou && <p className="text-xs text-teal-500 font-medium">You</p>}
       </div>
     </div>
   );

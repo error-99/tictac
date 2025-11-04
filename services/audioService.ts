@@ -39,6 +39,14 @@ class AudioService {
   playDraw() {
     this.play(this.drawAudio);
   }
+
+  // Fix: Add missing `playVoiceMessage` method to handle playing voice messages.
+  playVoiceMessage(audioBase64: string) {
+    if (this.isEnabled) {
+      const audio = new Audio(audioBase64);
+      audio.play().catch(error => console.error("Voice message play failed", error));
+    }
+  }
 }
 
 export const audioService = new AudioService();

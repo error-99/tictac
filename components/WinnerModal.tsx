@@ -3,13 +3,14 @@ import { WinnerInfo, Player } from '../types';
 import { PlayerOneAvatar, PlayerTwoAvatar } from './Icons';
 
 interface WinnerModalProps {
+  isVisible: boolean;
   winnerInfo: WinnerInfo | null;
   onReset: () => void;
   playerNames: { [key in Player | string]: string };
 }
 
-const WinnerModal: React.FC<WinnerModalProps> = ({ winnerInfo, onReset, playerNames }) => {
-  if (!winnerInfo) return null;
+const WinnerModal: React.FC<WinnerModalProps> = ({ isVisible, winnerInfo, onReset, playerNames }) => {
+  if (!isVisible || !winnerInfo) return null;
 
   const { winner } = winnerInfo;
 

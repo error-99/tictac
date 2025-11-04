@@ -19,6 +19,12 @@ export interface ChatMessage {
     timestamp: number;
 }
 
+export interface VoiceMessage {
+    senderName: string;
+    audioBase64: string;
+    timestamp: number;
+}
+
 export interface GameState {
     gameId: string;
     board: SquareValue[];
@@ -27,4 +33,5 @@ export interface GameState {
     status: 'waiting' | 'playing' | 'finished';
     winnerInfo: WinnerInfo | null;
     chat: ChatMessage[];
+    voiceMessages: VoiceMessage[];
 }

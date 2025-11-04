@@ -1,11 +1,11 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { GoogleGenAI, Type } from '@google/genai';
 import { Player, SquareValue, WinnerInfo, GameMode, GameState, OnlineGamePhase, ChatMessage } from './types';
 import PlayerInfo from './components/PlayerInfo';
 import GameBoard from './components/GameBoard';
 import WinnerModal from './components/WinnerModal';
-import { PlayerOneAvatar, PlayerTwoAvatar, SoundOnIcon, SoundOffIcon } from './components/Icons';
+import { PlayerOneAvatar, PlayerTwoAvatar, SoundOnIcon, SoundOffIcon, ChatIcon } from './components/Icons';
 import GameModeSelection from './components/GameModeSelection';
 import OnlineLobby from './components/OnlineLobby';
 import WaitingRoom from './components/WaitingRoom';
@@ -41,13 +41,18 @@ const App: React.FC = () => {
   const [isAiThinking, setIsAiThinking] = useState(false);
   const [playerName, setPlayerName] = useState('');
   const [isSoundOn, setIsSoundOn] = useState(true);
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [showWinnerModal, setShowWinnerModal] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const lastPlayedVoiceMessageTimestamp = useRef<number>(0);
 
 
   useEffect(() => {
     audioService.setSoundEnabled(isSoundOn);
   }, [isSoundOn]);
 
-  // Effect to handle joining an online game via URL
   useEffect(() => {
     const gameId = new URLSearchParams(window.location.search).get('gameId');
     if (gameId) {
@@ -55,7 +60,6 @@ const App: React.FC = () => {
       if (existingGame) {
         setGameMode('online');
         if (existingGame.status === 'playing') {
-          // This is a reconnect scenario, not fully implemented, just view for now.
           setGameState(existingGame);
           setOnlinePhase('playing');
         }
@@ -63,7 +67,6 @@ const App: React.FC = () => {
     }
   }, []);
   
-  // Polling for online game updates
   useEffect(() => {
     if (gameMode !== 'online' || !gameState?.gameId || onlinePhase !== 'playing') {
       return;
@@ -72,24 +75,40 @@ const App: React.FC = () => {
     const intervalId = setInterval(() => {
       const latestGameState = gameService.getGame(gameState.gameId);
       if (latestGameState) {
-        // A simple check to see if the state has changed
         if (JSON.stringify(latestGameState) !== JSON.stringify(gameState)) {
+          
+          if (latestGameState.board.filter(Boolean).length > gameState.board.filter(Boolean).length && latestGameState.winnerInfo === null) {
+            audioService.playMove();
+          }
+
           setGameState(latestGameState);
+
           if (latestGameState.winnerInfo && !gameState.winnerInfo) {
-             // Game just finished, update scores and play sound
-             if (latestGameState.winnerInfo.winner === 'Draw') {
-                audioService.playDraw();
-             } else {
-                audioService.playWin();
-                setScores(prev => ({...prev, [latestGameState.winnerInfo!.winner]: prev[latestGameState.winnerInfo!.winner] + 1}))
-             }
+             const handleWin = () => {
+                if (latestGameState.winnerInfo.winner === 'Draw') {
+                    audioService.playDraw();
+                } else {
+                    audioService.playWin();
+                    setScores(prev => ({...prev, [latestGameState.winnerInfo!.winner]: prev[latestGameState.winnerInfo!.winner] + 1}))
+                }
+                setShowWinnerModal(true);
+             };
+             setTimeout(handleWin, 3000);
+          }
+          
+          const latestVoiceMessage = latestGameState.voiceMessages[latestGameState.voiceMessages.length - 1];
+          if (latestVoiceMessage && latestVoiceMessage.timestamp > lastPlayedVoiceMessageTimestamp.current) {
+              if (latestVoiceMessage.senderName !== playerName) {
+                 audioService.playVoiceMessage(latestVoiceMessage.audioBase64);
+              }
+              lastPlayedVoiceMessageTimestamp.current = latestVoiceMessage.timestamp;
           }
         }
       }
     }, 1000);
   
     return () => clearInterval(intervalId);
-  }, [gameMode, gameState, onlinePhase]);
+  }, [gameMode, gameState, onlinePhase, playerName]);
 
 
   const handleSelectMode = (mode: GameMode) => {
@@ -106,17 +125,20 @@ const App: React.FC = () => {
       board: Array(9).fill(null),
       currentPlayer: 'X',
       players: [
-        { name: mode === 'ai' ? 'You' : 'gyd f', symbol: 'X' },
-        { name: mode === 'ai' ? 'Gemini AI' : 'Shavbir', symbol: 'O' }
+        { name: mode === 'ai' ? 'You' : 'Player 1', symbol: 'X' },
+        { name: mode === 'ai' ? 'Gemini AI' : 'Player 2', symbol: 'O' }
       ],
       status: 'playing',
       winnerInfo: null,
       chat: [],
+      voiceMessages: [],
     };
     setGameState(newGameState);
+    setShowWinnerModal(false);
   };
   
   const resetGame = (mode: 'local' | 'ai' | 'online') => {
+     setShowWinnerModal(false);
      if (mode === 'online' && gameState) {
         const newGameState = gameService.resetGame(gameState.gameId);
         setGameState(newGameState);
@@ -132,15 +154,19 @@ const App: React.FC = () => {
     const nextPlayer = gameState?.currentPlayer === 'X' ? 'O' : 'X';
 
     if (newWinnerInfo) {
-        if (newWinnerInfo.winner === 'Draw') {
-            audioService.playDraw();
-        } else {
-            audioService.playWin();
-            setScores(prevScores => ({
-                ...prevScores,
-                [newWinnerInfo.winner]: prevScores[newWinnerInfo.winner] + 1,
-            }));
-        }
+        const handleWin = () => {
+            if (newWinnerInfo.winner === 'Draw') {
+                audioService.playDraw();
+            } else {
+                audioService.playWin();
+                setScores(prevScores => ({
+                    ...prevScores,
+                    [newWinnerInfo.winner]: prevScores[newWinnerInfo.winner] + 1,
+                }));
+            }
+            setShowWinnerModal(true);
+        };
+        setTimeout(handleWin, 3000);
     }
 
     if (gameMode === 'online' && gameState) {
@@ -199,6 +225,7 @@ const App: React.FC = () => {
       const makeAiMove = async () => {
         const moveIndex = await getAiMove(gameState.board);
         if (moveIndex !== undefined && gameState.status === 'playing') {
+          audioService.playMove();
           const newBoard = gameState.board.slice();
           newBoard[moveIndex] = 'O';
           updateBoardAndCheckWinner(newBoard);
@@ -262,6 +289,46 @@ const App: React.FC = () => {
     }
   };
 
+  const handleStartRecording = async () => {
+    if (isRecording) return;
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorderRef.current = new MediaRecorder(stream);
+        audioChunksRef.current = [];
+        
+        mediaRecorderRef.current.ondataavailable = event => {
+            audioChunksRef.current.push(event.data);
+        };
+        
+        mediaRecorderRef.current.onstop = () => {
+            const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+            const reader = new FileReader();
+            reader.readAsDataURL(audioBlob);
+            reader.onloadend = () => {
+                const base64String = reader.result as string;
+                if (gameMode === 'online' && gameState && playerName) {
+                    const updatedGameState = gameService.sendVoiceMessage(gameState.gameId, playerName, base64String);
+                    setGameState(updatedGameState);
+                }
+            };
+            stream.getTracks().forEach(track => track.stop()); // Stop microphone access
+        };
+        
+        mediaRecorderRef.current.start();
+        setIsRecording(true);
+    } catch (err) {
+        console.error("Error accessing microphone:", err);
+        alert("Microphone access is required for voice chat. Please allow permission and try again.");
+    }
+  };
+
+  const handleStopRecording = () => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+          mediaRecorderRef.current.stop();
+          setIsRecording(false);
+      }
+  };
+
   if (!gameMode) {
     return <GameModeSelection onSelectMode={handleSelectMode} />;
   }
@@ -291,6 +358,19 @@ const App: React.FC = () => {
   }
   const isMyTurn = gameMode !== 'online' || player === gameState.currentPlayer;
 
+  const opponentName = gameMode === 'online' ? gameState.players.find(p => p && p.symbol !== player)?.name || 'Opponent' : '';
+  let turnText = '';
+  if (gameState.status === 'playing') {
+    if (gameMode === 'online') {
+      turnText = isMyTurn ? "Your Turn" : `${opponentName}'s Turn`;
+    } else if (gameMode === 'ai') {
+      turnText = gameState.currentPlayer === 'X' ? "Your Turn" : "Gemini's Turn";
+    } else {
+      turnText = `${playerNames[gameState.currentPlayer]}'s Turn`;
+    }
+  }
+
+
   const mainContent = (
     <>
       <header className="w-full flex justify-between items-center mb-6">
@@ -298,6 +378,7 @@ const App: React.FC = () => {
           name={playerNames.X}
           avatar={<PlayerOneAvatar />}
           isActive={gameState.currentPlayer === 'X' && gameState.status === 'playing'}
+          isYou={gameMode === 'online' && player === 'X'}
         />
         <div className="text-4xl font-bold text-slate-700 px-4">
           {scores.X}<span className="text-slate-400 mx-2">:</span>{scores.O}
@@ -308,8 +389,15 @@ const App: React.FC = () => {
           isActive={gameState.currentPlayer === 'O' && gameState.status === 'playing'}
           isThinking={isAiThinking && gameMode === 'ai'}
           isRightAligned
+          isYou={gameMode === 'online' && player === 'O'}
         />
       </header>
+
+      <div className="text-center mb-4 h-8 flex items-center justify-center">
+        <p className={`text-xl font-semibold transition-all duration-300 ${gameState.status === 'playing' ? 'opacity-100 scale-100' : 'opacity-0 scale-90'} ${isMyTurn ? 'text-teal-500' : 'text-slate-500'}`}>
+          {turnText}
+        </p>
+      </div>
       
       <GameBoard
         squares={gameState.board}
@@ -332,16 +420,48 @@ const App: React.FC = () => {
       </div>
 
       {gameMode === 'online' ? (
-        <main className="w-full max-w-4xl mx-auto flex flex-col md:flex-row items-start gap-6 mt-12">
-            <div className="flex-grow w-full max-w-md mx-auto">{mainContent}</div>
-            <div className="w-full md:w-80 lg:w-96 flex-shrink-0">
-                <ChatBox 
-                    messages={gameState.chat}
-                    onSendMessage={handleSendMessage}
-                    currentPlayerName={playerName}
-                />
+        <>
+          <main className="w-full max-w-5xl mx-auto flex flex-col md:flex-row items-start gap-8 mt-12">
+              <div className="flex-grow w-full max-w-md mx-auto">{mainContent}</div>
+              <div className="w-full md:w-80 lg:w-96 flex-shrink-0 hidden md:block">
+                  <ChatBox 
+                      messages={gameState.chat}
+                      onSendMessage={handleSendMessage}
+                      currentPlayerName={playerName}
+                      onStartRecording={handleStartRecording}
+                      onStopRecording={handleStopRecording}
+                      isRecording={isRecording}
+                  />
+              </div>
+          </main>
+           {/* Mobile Chat FAB */}
+          <div className="md:hidden fixed bottom-4 right-4 z-10">
+            <button onClick={() => setIsChatOpen(true)} className="bg-teal-500 text-white rounded-full p-4 shadow-lg hover:bg-teal-600 transition transform hover:scale-110 active:scale-100">
+              <ChatIcon />
+            </button>
+          </div>
+          {/* Mobile Chat Modal */}
+          {isChatOpen && (
+            <div className="md:hidden fixed inset-0 bg-slate-50 z-50 flex flex-col animate-slide-in-up">
+              <ChatBox 
+                messages={gameState.chat}
+                onSendMessage={handleSendMessage}
+                currentPlayerName={playerName}
+                onClose={() => setIsChatOpen(false)}
+                onStartRecording={handleStartRecording}
+                onStopRecording={handleStopRecording}
+                isRecording={isRecording}
+              />
             </div>
-        </main>
+          )}
+           <style>{`
+              @keyframes slide-in-up {
+                from { transform: translateY(100%); }
+                to { transform: translateY(0); }
+              }
+              .animate-slide-in-up { animation: slide-in-up 0.3s ease-out; }
+           `}</style>
+        </>
       ) : (
          <main className="w-full max-w-md mx-auto flex flex-col items-center mt-12">
             {mainContent}
@@ -349,6 +469,7 @@ const App: React.FC = () => {
       )}
 
       <WinnerModal 
+        isVisible={showWinnerModal}
         winnerInfo={gameState.winnerInfo} 
         onReset={() => gameMode && resetGame(gameMode)} 
         playerNames={playerNames} 
