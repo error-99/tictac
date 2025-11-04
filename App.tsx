@@ -1,15 +1,17 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { GoogleGenAI, Type } from '@google/genai';
-import { Player, SquareValue, WinnerInfo, GameMode, GameState, OnlineGamePhase } from './types';
+import { Player, SquareValue, WinnerInfo, GameMode, GameState, OnlineGamePhase, ChatMessage } from './types';
 import PlayerInfo from './components/PlayerInfo';
 import GameBoard from './components/GameBoard';
 import WinnerModal from './components/WinnerModal';
-import { PlayerOneAvatar, PlayerTwoAvatar } from './components/Icons';
+import { PlayerOneAvatar, PlayerTwoAvatar, SoundOnIcon, SoundOffIcon } from './components/Icons';
 import GameModeSelection from './components/GameModeSelection';
 import OnlineLobby from './components/OnlineLobby';
 import WaitingRoom from './components/WaitingRoom';
+import ChatBox from './components/ChatBox';
 import { gameService } from './services/gameService';
+import { audioService } from './services/audioService';
 
 
 const calculateWinner = (squares: SquareValue[]): WinnerInfo | null => {
@@ -38,6 +40,12 @@ const App: React.FC = () => {
   const [scores, setScores] = useState<{ X: number; O: number }>({ X: 0, O: 0 });
   const [isAiThinking, setIsAiThinking] = useState(false);
   const [playerName, setPlayerName] = useState('');
+  const [isSoundOn, setIsSoundOn] = useState(true);
+
+
+  useEffect(() => {
+    audioService.setSoundEnabled(isSoundOn);
+  }, [isSoundOn]);
 
   // Effect to handle joining an online game via URL
   useEffect(() => {
@@ -68,9 +76,12 @@ const App: React.FC = () => {
         if (JSON.stringify(latestGameState) !== JSON.stringify(gameState)) {
           setGameState(latestGameState);
           if (latestGameState.winnerInfo && !gameState.winnerInfo) {
-             // Game just finished, update scores
-             if (latestGameState.winnerInfo.winner !== 'Draw') {
-               setScores(prev => ({...prev, [latestGameState.winnerInfo!.winner]: prev[latestGameState.winnerInfo!.winner] + 1}))
+             // Game just finished, update scores and play sound
+             if (latestGameState.winnerInfo.winner === 'Draw') {
+                audioService.playDraw();
+             } else {
+                audioService.playWin();
+                setScores(prev => ({...prev, [latestGameState.winnerInfo!.winner]: prev[latestGameState.winnerInfo!.winner] + 1}))
              }
           }
         }
@@ -100,11 +111,11 @@ const App: React.FC = () => {
       ],
       status: 'playing',
       winnerInfo: null,
+      chat: [],
     };
     setGameState(newGameState);
   };
   
-  // FIX: Corrected the function signature which had a syntax error.
   const resetGame = (mode: 'local' | 'ai' | 'online') => {
      if (mode === 'online' && gameState) {
         const newGameState = gameService.resetGame(gameState.gameId);
@@ -121,12 +132,15 @@ const App: React.FC = () => {
     const nextPlayer = gameState?.currentPlayer === 'X' ? 'O' : 'X';
 
     if (newWinnerInfo) {
-      if (newWinnerInfo.winner !== 'Draw') {
-        setScores(prevScores => ({
-          ...prevScores,
-          [newWinnerInfo.winner]: prevScores[newWinnerInfo.winner] + 1,
-        }));
-      }
+        if (newWinnerInfo.winner === 'Draw') {
+            audioService.playDraw();
+        } else {
+            audioService.playWin();
+            setScores(prevScores => ({
+                ...prevScores,
+                [newWinnerInfo.winner]: prevScores[newWinnerInfo.winner] + 1,
+            }));
+        }
     }
 
     if (gameMode === 'online' && gameState) {
@@ -201,6 +215,7 @@ const App: React.FC = () => {
     if(gameMode === 'online' && gameState.currentPlayer !== player) return;
     if(gameMode === 'ai' && gameState.currentPlayer === 'O') return;
 
+    audioService.playMove();
     const newBoard = gameState.board.slice();
     newBoard[index] = gameState.currentPlayer;
     updateBoardAndCheckWinner(newBoard);
@@ -239,6 +254,13 @@ const App: React.FC = () => {
     setPlayerName('');
     window.history.pushState({}, '', '/');
   };
+  
+  const handleSendMessage = (message: string) => {
+    if (gameMode === 'online' && gameState && playerName) {
+      const updatedGameState = gameService.sendMessage(gameState.gameId, playerName, message);
+      setGameState(updatedGameState);
+    }
+  };
 
   if (!gameMode) {
     return <GameModeSelection onSelectMode={handleSelectMode} />;
@@ -255,7 +277,6 @@ const App: React.FC = () => {
   }
 
   if (!gameState) {
-    // Should not happen if logic is correct, but a good fallback.
     return (
       <div className="bg-slate-50 text-slate-800 min-h-screen flex flex-col items-center justify-center p-4">
         <h2 className="text-2xl font-bold">Something went wrong.</h2>
@@ -270,41 +291,63 @@ const App: React.FC = () => {
   }
   const isMyTurn = gameMode !== 'online' || player === gameState.currentPlayer;
 
+  const mainContent = (
+    <>
+      <header className="w-full flex justify-between items-center mb-6">
+        <PlayerInfo
+          name={playerNames.X}
+          avatar={<PlayerOneAvatar />}
+          isActive={gameState.currentPlayer === 'X' && gameState.status === 'playing'}
+        />
+        <div className="text-4xl font-bold text-slate-700 px-4">
+          {scores.X}<span className="text-slate-400 mx-2">:</span>{scores.O}
+        </div>
+        <PlayerInfo
+          name={playerNames.O}
+          avatar={<PlayerTwoAvatar />}
+          isActive={gameState.currentPlayer === 'O' && gameState.status === 'playing'}
+          isThinking={isAiThinking && gameMode === 'ai'}
+          isRightAligned
+        />
+      </header>
+      
+      <GameBoard
+        squares={gameState.board}
+        onClick={handleSquareClick}
+        winningLine={gameState.winnerInfo?.line}
+        isLocked={!isMyTurn || gameState.status !== 'playing'}
+      />
+    </>
+  );
+
   return (
     <div className="bg-slate-50 text-slate-800 min-h-screen flex flex-col items-center justify-center p-4 sm:p-6 select-none">
-      <main className="w-full max-w-md mx-auto flex flex-col items-center">
-        <header className="w-full flex justify-between items-center mb-6">
-          <PlayerInfo
-            name={playerNames.X}
-            avatar={<PlayerOneAvatar />}
-            isActive={gameState.currentPlayer === 'X' && gameState.status === 'playing'}
-          />
-          <div className="text-4xl font-bold text-slate-700 px-4">
-            {scores.X}<span className="text-slate-400 mx-2">:</span>{scores.O}
-          </div>
-          <PlayerInfo
-            name={playerNames.O}
-            avatar={<PlayerTwoAvatar />}
-            isActive={gameState.currentPlayer === 'O' && gameState.status === 'playing'}
-            isThinking={isAiThinking && gameMode === 'ai'}
-            isRightAligned
-          />
-        </header>
-        
-        <GameBoard
-          squares={gameState.board}
-          onClick={handleSquareClick}
-          winningLine={gameState.winnerInfo?.line}
-          isLocked={!isMyTurn || gameState.status !== 'playing'}
-        />
-
-        <div className="mt-6">
-          <button onClick={handleReturnToMenu} className="text-slate-500 hover:text-slate-700 transition">
-            &larr; Return to Menu
+       <div className="absolute top-4 right-4 flex items-center gap-4">
+         <button onClick={handleReturnToMenu} className="text-slate-500 hover:text-slate-700 transition">
+            &larr; Menu
           </button>
-        </div>
+        <button onClick={() => setIsSoundOn(!isSoundOn)} className="text-slate-400 hover:text-slate-600 transition">
+          {isSoundOn ? <SoundOnIcon /> : <SoundOffIcon />}
+        </button>
+      </div>
 
-      </main>
+      {gameMode === 'online' ? (
+        <main className="w-full max-w-4xl mx-auto flex flex-col md:flex-row items-start gap-6 mt-12">
+            <div className="flex-grow w-full max-w-md mx-auto">{mainContent}</div>
+            <div className="w-full md:w-80 lg:w-96 flex-shrink-0">
+                <ChatBox 
+                    messages={gameState.chat}
+                    onSendMessage={handleSendMessage}
+                    currentPlayerName={playerName}
+                />
+            </div>
+        </main>
+      ) : (
+         <main className="w-full max-w-md mx-auto flex flex-col items-center mt-12">
+            {mainContent}
+         </main>
+      )}
+
       <WinnerModal 
         winnerInfo={gameState.winnerInfo} 
         onReset={() => gameMode && resetGame(gameMode)} 

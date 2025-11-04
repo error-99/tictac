@@ -13,6 +13,12 @@ export interface PlayerInfo {
     symbol: Player;
 }
 
+export interface ChatMessage {
+    senderName: string;
+    text: string;
+    timestamp: number;
+}
+
 export interface GameState {
     gameId: string;
     board: SquareValue[];
@@ -20,4 +26,5 @@ export interface GameState {
     currentPlayer: Player;
     status: 'waiting' | 'playing' | 'finished';
     winnerInfo: WinnerInfo | null;
+    chat: ChatMessage[];
 }
